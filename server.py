@@ -1,263 +1,149 @@
-import os
-import json
+import os, json, requests
 from flask import Flask, jsonify, request
-import requests
 from datetime import datetime, timezone, timedelta
 
-# =====================================================
-# KONFIGURATION
-# =====================================================
-API_KEY = os.environ.get("CLASH_API_KEY")
-CLAN_TAG = "#DEINCLANTAG"   # z.B. #ABCD123 (WICHTIG: nur Großbuchstaben + Zahlen)
-
-EXCUSES_FILE = "excuses.json"
-
 app = Flask(__name__)
+
+# ==========================
+# KONFIG
+# ==========================
+API_KEY = os.environ.get("CLASH_API_KEY") or "HIER_DEIN_API_KEY"
+CLAN_TAG = "#DEINCLANTAG"
+CLAN_TAG_URL = "%23" + CLAN_TAG[1:]
 
 HEADERS = {
     "Authorization": f"Bearer {API_KEY}"
 }
 
-# =====================================================
-# HILFSFUNKTIONEN
-# =====================================================
+EXCUSES_FILE = "excuses.json"
+
+# ==========================
+# HELFER
+# ==========================
 def load_excuses():
     if not os.path.exists(EXCUSES_FILE):
         return {}
-    with open(EXCUSES_FILE, "r") as f:
-        return json.load(f)
+    return json.load(open(EXCUSES_FILE))
 
-def save_excuses(data):
-    with open(EXCUSES_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+def save_excuses(d):
+    json.dump(d, open(EXCUSES_FILE, "w"), indent=2)
 
-def get_clan_members():
-    url = f"https://api.clashroyale.com/v1/clans/%23{CLAN_TAG[1:]}/members"
-    r = requests.get(url, headers=HEADERS)
-    return r.status_code, r.json()
+def cr(path):
+    r = requests.get(f"https://api.clashroyale.com/v1{path}", headers=HEADERS)
+    if r.status_code != 200:
+        return None
+    return r.json()
 
-# =====================================================
-# ROUTES
-# =====================================================
+def now():
+    return datetime.now(timezone.utc)
 
+# ==========================
 @app.route("/")
 def home():
-    return "Clan Manager Backend läuft ✅"
+    return "Backend OK"
 
-# -----------------------------------------------------
-# ROHDATEN (DEBUG)
-# -----------------------------------------------------
-@app.route("/clan")
-def clan():
-    status, data = get_clan_members()
-    return jsonify(data), status
-
-# -----------------------------------------------------
-# SPIELER + INAKTIVITÄT + ENTSCHULDIGT
-# -----------------------------------------------------
+# ==========================
+# PLAYERS
+# ==========================
 @app.route("/players")
 def players():
-    status, data = get_clan_members()
-    if "items" not in data:
-        return jsonify(data), status
+    data = cr(f"/clans/{CLAN_TAG_URL}/members")
+    if not data:
+        return jsonify([])
 
     excuses = load_excuses()
-    now = datetime.now(timezone.utc)
-    result = []
+    res = []
 
     for p in data["items"]:
         last_seen = datetime.strptime(
             p["lastSeen"], "%Y%m%dT%H%M%S.%fZ"
         ).replace(tzinfo=timezone.utc)
 
-        inactive_days = (now - last_seen).days
+        inactive = (now() - last_seen).days
         tag = p["tag"]
 
-        excuse = excuses.get(tag)
-        is_excused = False
+        status = "good"
+        if tag in excuses and datetime.fromisoformat(excuses[tag]["until"]) > now():
+            status = "excused"
+        elif inactive >= 3:
+            status = "danger"
+        elif inactive >= 2:
+            status = "warning"
 
-        if excuse:
-            until = datetime.fromisoformat(excuse["until"])
-            if until > now:
-                is_excused = True
-            else:
-                excuses.pop(tag)
-                save_excuses(excuses)
-
-        if is_excused:
-            status_text = "excused"
-        elif inactive_days >= 3:
-            status_text = "danger"
-        elif inactive_days >= 2:
-            status_text = "warning"
-        else:
-            status_text = "active"
-
-        result.append({
+        res.append({
             "name": p["name"],
             "tag": tag,
             "role": p["role"],
-            "trophies": p["trophies"],
-            "donations": p["donations"],
-            "inactiveDays": inactive_days,
-            "status": status_text
+            "inactiveDays": inactive,
+            "status": status
         })
 
-    return jsonify(result)
+    return jsonify(res)
 
-# -----------------------------------------------------
-# SPIELER ENTSCHULDIGEN
-# -----------------------------------------------------
+# ==========================
+# EXCUSE
+# ==========================
 @app.route("/excuse", methods=["POST"])
-def excuse_player():
-    data = request.json
-    tag = data.get("tag")
-    days = int(data.get("days", 1))
-
+def excuse():
+    d = request.json
     excuses = load_excuses()
-    until = datetime.now(timezone.utc) + timedelta(days=days)
-
-    excuses[tag] = {"until": until.isoformat()}
+    until = now() + timedelta(days=int(d["days"]))
+    excuses[d["tag"]] = {"until": until.isoformat()}
     save_excuses(excuses)
+    return jsonify({"ok": True})
 
-    return jsonify({
-        "ok": True,
-        "tag": tag,
-        "until": until.isoformat()
-    })
-
-# -----------------------------------------------------
-# STATISTIKEN (SPENDEN / TROPHÄEN)
-# -----------------------------------------------------
-@app.route("/stats")
-def stats():
-    status, data = get_clan_members()
-    if "items" not in data:
-        return jsonify(data), status
-
-    members = data["items"]
-
-    return jsonify({
-        "topDonations": sorted(
-            [{"name": m["name"], "donations": m["donations"]} for m in members],
-            key=lambda x: x["donations"],
-            reverse=True
-        )[:5],
-        "topTrophies": sorted(
-            [{"name": m["name"], "trophies": m["trophies"]} for m in members],
-            key=lambda x: x["trophies"],
-            reverse=True
-        )[:5]
-    })
-
-# -----------------------------------------------------
-# CLANKRIEG (KÄMPFE / MEDAILLEN)
-# -----------------------------------------------------
+# ==========================
+# RIVER / WAR
+# ==========================
 @app.route("/war")
-def war():
-    url = f"https://api.clashroyale.com/v1/clans/%23{CLAN_TAG[1:]}/currentwar"
-    r = requests.get(url, headers=HEADERS)
-    data = r.json()
-
-    if "participants" not in data:
-        return jsonify(data), r.status_code
-
-    result = []
-    for p in data["participants"]:
-        decks = p.get("decksUsed", 0)
-
-        result.append({
-            "name": p["name"],
-            "tag": p["tag"],
-            "medals": p.get("fame", 0),
-            "decksUsed": decks,
-            "decksUsedToday": p.get("decksUsedToday", 0),
-            "status": (
-                "good" if decks >= 4 else
-                "warning" if decks >= 1 else
-                "danger"
-            )
-        })
-
-    return jsonify(result)
-
-# -----------------------------------------------------
-# CLANREISE / RIVER RACE
-# -----------------------------------------------------
 @app.route("/river")
 def river():
-    url = f"https://api.clashroyale.com/v1/clans/%23{CLAN_TAG[1:]}/currentriverrace"
-    r = requests.get(url, headers=HEADERS)
-    data = r.json()
+    data = cr(f"/clans/{CLAN_TAG_URL}/currentriverrace")
+    if not data or "clan" not in data:
+        return jsonify([])
 
-    if "clans" not in data:
-        return jsonify(data), r.status_code
-
-    clan = next(c for c in data["clans"] if c["tag"] == CLAN_TAG)
-    result = []
-
-    for p in clan["participants"]:
-        fame = p.get("fame", 0)
-
-        result.append({
+    res = []
+    for p in data["clan"]["participants"]:
+        res.append({
             "name": p["name"],
             "tag": p["tag"],
-            "fame": fame,
-            "status": (
-                "good" if fame >= 900 else
-                "warning" if fame >= 400 else
-                "danger"
-            )
+            "decksUsed": p.get("decksUsed", 0),
+            "medals": p.get("fame", 0),
+            "fame": p.get("fame", 0),
+            "status": "danger" if p.get("decksUsed", 0) == 0 else "good"
         })
 
-    return jsonify(result)
+    return jsonify(res)
 
-# -----------------------------------------------------
-# GESAMT-RANKING
-# -----------------------------------------------------
+# ==========================
+# LEADERBOARD
+# ==========================
 @app.route("/leaderboard")
 def leaderboard():
-    members = requests.get(
-        f"https://api.clashroyale.com/v1/clans/%23{CLAN_TAG[1:]}/members",
-        headers=HEADERS
-    ).json().get("items", [])
+    members = cr(f"/clans/{CLAN_TAG_URL}/members")
+    river = cr(f"/clans/{CLAN_TAG_URL}/currentriverrace")
 
-    war = requests.get(
-        f"https://api.clashroyale.com/v1/clans/%23{CLAN_TAG[1:]}/currentwar",
-        headers=HEADERS
-    ).json().get("participants", [])
+    if not members:
+        return jsonify([])
 
-    river = requests.get(
-        f"https://api.clashroyale.com/v1/clans/%23{CLAN_TAG[1:]}/currentriverrace",
-        headers=HEADERS
-    ).json()
+    river_map = {}
+    if river and "clan" in river:
+        river_map = {
+            p["tag"]: p.get("fame", 0)
+            for p in river["clan"]["participants"]
+        }
 
-    war_map = {p["tag"]: p.get("fame", 0) for p in war}
-
-    river_clan = next(
-        (c for c in river.get("clans", []) if c["tag"] == CLAN_TAG),
-        None
-    )
-    river_map = {
-        p["tag"]: p.get("fame", 0)
-        for p in (river_clan["participants"] if river_clan else [])
-    }
-
-    leaderboard = []
-    for m in members:
-        tag = m["tag"]
-        leaderboard.append({
+    res = []
+    for m in members["items"]:
+        score = m["donations"] + river_map.get(m["tag"], 0)
+        res.append({
             "name": m["name"],
-            "tag": tag,
-            "donations": m["donations"],
-            "warFame": war_map.get(tag, 0),
-            "riverFame": river_map.get(tag, 0),
-            "score": m["donations"] + war_map.get(tag, 0) + river_map.get(tag, 0)
+            "score": score
         })
 
-    leaderboard.sort(key=lambda x: x["score"], reverse=True)
-    return jsonify(leaderboard)
+    res.sort(key=lambda x: x["score"], reverse=True)
+    return jsonify(res)
 
-# =====================================================
+# ==========================
 if __name__ == "__main__":
-    app.run()
+    app.run(host="0.0.0.0", port=10000)
