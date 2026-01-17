@@ -15,10 +15,19 @@ HEADERS = {
 def clan():
     url = f"https://api.clashroyale.com/v1/clans/%23{CLAN_TAG[1:]}/members"
     r = requests.get(url, headers=HEADERS)
-    return jsonify(r.json()["items"])
 
-if __name__ == "__main__":
-    app.run()
+    data = r.json()
+
+    # Wenn Supercell einen Fehler zurückgibt
+    if "items" not in data:
+        return jsonify({
+            "error": "Clash Royale API error",
+            "status_code": r.status_code,
+            "response": data
+        }), r.status_code
+
+    return jsonify(data["items"])
+
 
 
 
