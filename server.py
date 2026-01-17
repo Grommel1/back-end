@@ -8,7 +8,7 @@ app = Flask(__name__)
 # KONFIG
 # ==========================
 API_KEY = os.environ.get("CLASH_API_KEY") or "HIER_DEIN_API_KEY"
-CLAN_TAG = "#DEINCLANTAG"
+CLAN_TAG = "#GU88RCLP"
 CLAN_TAG_URL = "%23" + CLAN_TAG[1:]
 
 HEADERS = {
@@ -147,3 +147,4 @@ def leaderboard():
 # ==========================
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
+
