@@ -2,7 +2,7 @@ from flask import Flask, jsonify
 import requests
 
 API_KEY = ""
-CLAN_TAG = "#"
+CLAN_TAG = "#GU88RCLP"
 
 app = Flask(__name__)
 
@@ -18,5 +18,6 @@ def clan():
 
 if __name__ == "__main__":
     app.run()
+
 
 
