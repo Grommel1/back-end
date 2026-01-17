@@ -1,6 +1,6 @@
 import os
 from flask import Flask, jsonify
-import request
+import requests
 
 API_KEY = os.environ.get("CLASH_API_KEY")
 CLAN_TAG = "#GU88RCLP"
@@ -19,6 +19,7 @@ def clan():
 
 if __name__ == "__main__":
     app.run()
+
 
 
 
