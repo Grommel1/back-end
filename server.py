@@ -1,6 +1,7 @@
 import os
 import json
 from flask import Flask, jsonify, request
+from flask_cors import CORS
 import requests
 from datetime import datetime, timezone, timedelta
 
@@ -8,11 +9,15 @@ from datetime import datetime, timezone, timedelta
 # CONFIG
 # =====================
 API_KEY = os.environ.get("CLASH_API_KEY")
-CLAN_TAG = "#GU88RCLP"  # z.B. #ABCD123
+CLAN_TAG = "#GU88RCLP"  # DEIN Clan-Tag
 
 EXCUSES_FILE = "excuses.json"
 
+# =====================
+# APP SETUP
+# =====================
 app = Flask(__name__)
+CORS(app)  # <<< WICHTIG: erlaubt Zugriff vom Browser
 
 HEADERS = {
     "Authorization": f"Bearer {API_KEY}"
@@ -66,14 +71,16 @@ def players():
     result = []
 
     for p in data["items"]:
-        last_seen = datetime.strptime(p["lastSeen"], "%Y%m%dT%H%M%S.%fZ")
-        last_seen = last_seen.replace(tzinfo=timezone.utc)
+        last_seen = datetime.strptime(
+            p["lastSeen"], "%Y%m%dT%H%M%S.%fZ"
+        ).replace(tzinfo=timezone.utc)
+
         inactive_days = (now - last_seen).days
-
         tag = p["tag"]
-        excuse = excuses.get(tag)
 
+        # Entschuldigung prüfen
         is_excused = False
+        excuse = excuses.get(tag)
         if excuse:
             until = datetime.fromisoformat(excuse["until"])
             if until > now:
@@ -82,6 +89,7 @@ def players():
                 excuses.pop(tag)
                 save_excuses(excuses)
 
+        # Status bestimmen
         if is_excused:
             status_text = "excused"
         elif inactive_days >= 3:
@@ -112,6 +120,9 @@ def excuse_player():
     tag = data.get("tag")
     days = int(data.get("days", 1))
 
+    if not tag:
+        return jsonify({"error": "tag fehlt"}), 400
+
     excuses = load_excuses()
     until = datetime.now(timezone.utc) + timedelta(days=days)
 
@@ -120,7 +131,12 @@ def excuse_player():
     }
 
     save_excuses(excuses)
-    return jsonify({"ok": True, "tag": tag, "until": until.isoformat()})
+
+    return jsonify({
+        "ok": True,
+        "tag": tag,
+        "until": until.isoformat()
+    })
 
 # ---------------------
 # STATISTIKEN
@@ -133,8 +149,13 @@ def stats():
 
     members = data["items"]
 
-    top_donations = sorted(members, key=lambda x: x["donations"], reverse=True)[:5]
-    top_trophies = sorted(members, key=lambda x: x["trophies"], reverse=True)[:5]
+    top_donations = sorted(
+        members, key=lambda x: x["donations"], reverse=True
+    )[:5]
+
+    top_trophies = sorted(
+        members, key=lambda x: x["trophies"], reverse=True
+    )[:5]
 
     return jsonify({
         "topDonations": [
